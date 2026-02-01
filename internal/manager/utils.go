@@ -1,0 +1,61 @@
+package manager
+
+import (
+	"crypto/ecdsa"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
+	"errors"
+)
+
+func parseX509Cert(certPEM string) (*x509.Certificate, error) {
+	certBytes, err := base64.StdEncoding.DecodeString(certPEM)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(certBytes)
+	if block == nil {
+		return nil, errors.New("Invalid certificate")
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	return cert, nil
+}
+
+func parsePrivateKey(keyPEM string) (*ecdsa.PrivateKey, error) {
+	keyBytes, err := base64.StdEncoding.DecodeString(keyPEM)
+	if err != nil {
+		return nil, err
+	}
+
+	block, _ := pem.Decode(keyBytes)
+	if block == nil {
+		return nil, errors.New("Invalid Key block")
+	}
+
+	privateKey, err := x509.ParseECPrivateKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+
+	return privateKey, nil
+}
+
+func buildClientTLSConfig(config *PartyTLS) (*tls.Config, error) {
+
+	tlsCert := tls.Certificate{
+		PrivateKey: config.PrivateKey,
+		Leaf:       config.Certificate,
+	}
+
+	tlsConfig := &tls.Config{
+		Certificates:       []tls.Certificate{tlsCert},
+		InsecureSkipVerify: false,
+	}
+
+	return tlsConfig, nil
+}
