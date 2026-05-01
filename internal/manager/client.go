@@ -109,7 +109,7 @@ func (c *PartyClient) getAuth() (string, error) {
 	return auth.Token, nil
 }
 
-func (c *PartyClient) joinMainParty(ctx context.Context) error {
+func (c *PartyClient) joinGlobalParty(ctx context.Context) error {
 	connectCtx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	token, err := c.getAuth()
@@ -157,7 +157,7 @@ func (c *PartyClient) joinMainParty(ctx context.Context) error {
 			}
 		}
 	}(loopCtx, wsClient, wsChannel, cancel)
-	sleepMinutes := rand.Intn(5-1) + 1
+	sleepMinutes := rand.Intn(20)
 	ticker := time.NewTicker(time.Duration(sleepMinutes) * time.Minute)
 	defer ticker.Stop()
 
@@ -170,13 +170,12 @@ func (c *PartyClient) joinMainParty(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case msg := <-wsChannel:
-			response, err := manager.HandleMessage(msg)
-			if err == nil && response == nil {
+			err := manager.HandleMessage(msg)
+			if err == nil  {
 				continue
 			}
-			if err != nil {
-				response = ErrorMessage(err.Error(), c.memberId)
-			}
+			response := ErrorMessage(err.Error(), c.memberId)
+			
 			writeContext, timeoutCancel := context.WithTimeout(ctx, time.Millisecond*500)
 			defer timeoutCancel()
 			err = wsClient.Write(writeContext, websocket.MessageText, response)
@@ -217,7 +216,7 @@ func (c *PartyClient) Join(ctx context.Context) error {
 					continue
 				}
 			}
-			if err := c.joinMainParty(ctx); err != nil {
+			if err := c.joinGlobalParty(ctx); err != nil {
 				c.logger.WithError(err).Error("An error occurred in main party")
 				continue
 			}

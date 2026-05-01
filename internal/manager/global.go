@@ -10,23 +10,30 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dino16m/clippa-client/internal/clip"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 )
+
+
+type ClipboardManager interface {
+	Write(buf []byte)
+	AddOutbox(outbox chan<- []byte)
+	Listen(ctx context.Context)
+}
+
 
 type GlobalPartyManagerProvider struct {
 	logger               *logrus.Logger
 	serverProvider       *LocalServerProvider
 	netInterfaceProvider func() []string
-	clipboardManager     *clip.ClipboardManager
+	clipboardManager     ClipboardManager
 }
 
 func NewGlobalPartyManagerProvider(
 	logger *logrus.Logger,
 	serverProvider *LocalServerProvider,
 	netInterfaceProvider func() []string,
-	clipboardManager *clip.ClipboardManager,
+	clipboardManager ClipboardManager,
 ) *GlobalPartyManagerProvider {
 	return &GlobalPartyManagerProvider{
 		logger:               logger,
@@ -49,7 +56,7 @@ func (m *GlobalPartyManagerProvider) ProvideGlobalPartyManager(
 }
 
 type GlobalPartyManager struct {
-	clipboardManager     *clip.ClipboardManager
+	clipboardManager     ClipboardManager
 	hangup               chan struct{}
 	memberId             string
 	members              map[string]struct{}
@@ -71,7 +78,7 @@ func NewGlobalPartyManager(
 	netInterfaceProvider func() []string,
 	tlsConfig *PartyTLS,
 	partyId string,
-	clipboardManager *clip.ClipboardManager,
+	clipboardManager ClipboardManager,
 ) *GlobalPartyManager {
 	outbox := make(chan []byte)
 	clipboardManager.AddOutbox(outbox)
@@ -172,7 +179,7 @@ func (m *GlobalPartyManager) conclave(msg Message[ConclaveData]) {
 		m.writeToOutbox(ErrorMessage("ERR_DUPLICATE_CONCLAVE", m.memberId))
 	}
 
-	go m.startConclave(msg.Data.Generation)
+	m.startConclave(msg.Data.Generation)
 
 	go func() {
 		tlsConfig, err := buildClientTLSConfig(m.tlsConfig)
@@ -274,10 +281,10 @@ func (m *GlobalPartyManager) buildGenerationId() string {
 	return fmt.Sprintf("%s:%s", m.memberId, uuid.NewString())
 }
 
-func (m *GlobalPartyManager) HandleMessage(buf []byte) ([]byte, error) {
+func (m *GlobalPartyManager) HandleMessage(buf []byte) (error) {
 	msgType, err := getMessageType(buf)
 	if err != nil {
-		return nil, err
+		return  err
 	}
 	m.logger.WithField("msgType", msgType).Info("Got message type")
 	switch msgType {
@@ -285,21 +292,22 @@ func (m *GlobalPartyManager) HandleMessage(buf []byte) ([]byte, error) {
 		msg, _ := parseMessage[ConclaveData](buf)
 		m.logger.WithField("addresses", msg.Data.Addresses).Info("Conclave message received")
 		go m.conclave(msg)
-		return nil, nil
+		return nil
 	case Ping:
 		m.logger.Info("Ping received")
 		m.clearMembers()
-		return buildMessage(m.memberId, Pong, UnitData{}), nil
+		m.writeToOutbox(buildMessage(m.memberId, Pong, UnitData{}))
+		return nil
 	case Pong:
 		m.logger.Info("Pong received")
 		msg, _ := parseMessage[UnitData](buf)
 		m.addMember(msg.Sender)
-		return nil, nil
+		return  nil
 	case Vote:
 		msg, _ := parseMessage[VoteData](buf)
 		m.logger.WithField("ballots", len(msg.Data.Ballots)).Info("Vote message received")
 		m.handleVote(msg)
-		return nil, nil
+		return  nil
 	case SetLeader:
 		msg, _ := parseMessage[SetLeaderData](buf)
 		m.logger.WithField("leaderAddress", msg.Data.Address).Info("SetLeader message received")
@@ -309,43 +317,42 @@ func (m *GlobalPartyManager) HandleMessage(buf []byte) ([]byte, error) {
 				close(m.hangup)
 			}
 		}
-		return nil, nil
+		return  nil
 	case Inconclusive:
 		msg, _ := parseMessage[InconclusiveData](buf)
 		m.logger.WithField("generation", msg.Data.Generation).Info("Conclave Inconclusive message received")
-		return nil, nil
+		return  nil
 	case LeaderElected:
 		msg, _ := parseMessage[SetLeaderData](buf)
 		m.logger.WithField("leaderAddress", msg.Data.Address).Info("LeaderElected message received")
 		if !m.hasConsensus(msg) && m.isConclaveAdmin(m.memberId, msg.Data.Generation) {
 			m.endConclave(msg.Data.Generation)
 			m.writeToOutbox(buildMessage(m.memberId, Inconclusive, InconclusiveData{Generation: msg.Data.Generation}))
-			go m.startConclave(m.buildGenerationId())
 		}
-		return nil, nil
+		return  nil
 	case Clipboard:
 		msg, _ := parseMessage[ClipboardData](buf)
 		if msg.Sender == m.memberId {
-			return nil, nil
+			return  nil
 		}
 		m.clipboardManager.Write([]byte(msg.Data.Content))
-		return nil, nil
+		return  nil
 	case Joined:
 		msg, _ := parseMessage[UnitData](buf)
 		m.addMember(msg.Sender)
-		return nil, nil
+		return  nil
 	case Left:
 		msg, _ := parseMessage[UnitData](buf)
 		m.removeMember(msg.Sender)
 		m.removeMemberConclaves(msg.Sender)
 		m.logger.WithField("memberId", msg.Sender).Info("Member left")
-		return nil, nil
+		return  nil
 	case Error:
 		msg, _ := parseMessage[ErrorData](buf)
 		m.logger.WithField("error", msg.Data.Error).Warn("Error message received")
-		return nil, nil
+		return nil
 	default:
-		return nil, nil
+		return nil
 	}
 }
 

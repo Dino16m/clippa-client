@@ -8,6 +8,7 @@ import (
 	"golang.design/x/clipboard"
 )
 
+
 type ClipboardManager struct {
 	inbox    chan []byte
 	outboxes []chan<- []byte
@@ -27,6 +28,11 @@ func (m *ClipboardManager) Write(buf []byte) {
 func (m *ClipboardManager) AddOutbox(outbox chan<- []byte) {
 	m.outboxes = append(m.outboxes, outbox)
 }
+
+func (m *ClipboardManager) Outbox() <-chan []byte {
+	return m.inbox
+}
+
 
 func (m *ClipboardManager) Listen(ctx context.Context) {
 	clipboard.Init()
