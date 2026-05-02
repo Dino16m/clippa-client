@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"net/http"
+	"time"
 )
 
 func parseX509Cert(certPEM string) (*x509.Certificate, error) {
@@ -58,4 +60,21 @@ func buildClientTLSConfig(config *PartyTLS) (*tls.Config, error) {
 	}
 
 	return tlsConfig, nil
+}
+
+func provideHttpClient(config *PartyTLS) (*http.Client, error) {
+	tlsConfig, err := buildClientTLSConfig(config)
+		if err != nil {
+			return nil, err
+		}
+		transport := &http.Transport{
+			TLSClientConfig: tlsConfig,
+		}
+
+		client := &http.Client{
+			Transport: transport,
+			Timeout:   5 * time.Second,
+		}
+
+		return client, nil
 }

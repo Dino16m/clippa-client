@@ -55,6 +55,12 @@ func (m *GlobalPartyManagerProvider) ProvideGlobalPartyManager(
 		m.clipboardManager)
 }
 
+
+
+type ServerProvider interface {
+	ProvideLocalServer(partyId string, tlsConfig *PartyTLS, ctx context.Context) (*LocalServer, error)
+}
+
 type GlobalPartyManager struct {
 	clipboardManager     ClipboardManager
 	hangup               chan struct{}
@@ -62,11 +68,12 @@ type GlobalPartyManager struct {
 	members              map[string]struct{}
 	logger               *logrus.Entry
 	outbox               chan []byte
-	serverProvider       *LocalServerProvider
+	serverProvider       ServerProvider
 	netInterfaceProvider func() []string
 	conclaveManagers     map[string]*conclaveManager
 	tlsConfig            *PartyTLS
 	partyId              string
+	httpClientProvider   func(*PartyTLS) (*http.Client, error)
 
 	conclaveMutex *sync.RWMutex
 }
@@ -74,7 +81,7 @@ type GlobalPartyManager struct {
 func NewGlobalPartyManager(
 	memberId string,
 	logger *logrus.Entry,
-	serverProvider *LocalServerProvider,
+	serverProvider ServerProvider,
 	netInterfaceProvider func() []string,
 	tlsConfig *PartyTLS,
 	partyId string,
@@ -94,6 +101,7 @@ func NewGlobalPartyManager(
 		conclaveMutex:        &sync.RWMutex{},
 		tlsConfig:            tlsConfig,
 		partyId:              partyId,
+		httpClientProvider:   provideHttpClient,
 	}
 }
 
@@ -182,21 +190,12 @@ func (m *GlobalPartyManager) conclave(msg Message[ConclaveData]) {
 	m.startConclave(msg.Data.Generation)
 
 	go func() {
-		tlsConfig, err := buildClientTLSConfig(m.tlsConfig)
+		client, err := m.httpClientProvider(m.tlsConfig)
 		if err != nil {
-			m.logger.WithError(err).Error("Failed to build TLS config")
+			m.logger.WithError(err).Error("Failed to build Http Client")
 			return
 		}
-
-		transport := &http.Transport{
-			TLSClientConfig: tlsConfig,
-		}
-
-		client := &http.Client{
-			Transport: transport,
-			Timeout:   5 * time.Second,
-		}
-		ballots := make([]Ballot, 0, len(msg.Data.Addresses))
+		ballots := make([]Ballot, len(msg.Data.Addresses))
 		m.conclaveMutex.RLock()
 		mgr := m.conclaveManagers[msg.Data.Generation]
 		m.conclaveMutex.RUnlock()
@@ -227,13 +226,14 @@ func (m *GlobalPartyManager) writeToOutbox(buf []byte) {
 }
 
 func (m *GlobalPartyManager) handleVote(msg Message[VoteData]) {
+	m.logger.Info("handleVote called")
 	m.conclaveMutex.RLock()
 	mgr := m.conclaveManagers[msg.Data.Generation]
 	m.conclaveMutex.RUnlock()
 	for _, ballot := range msg.Data.Ballots {
 		mgr.addVote(msg.Sender, ballot.Address, ballot.Reachable)
 	}
-	if mgr.votesComplete() {
+	if mgr.votesComplete(m.members) {
 		m.writeToOutbox(
 			buildMessage(m.memberId, LeaderElected, SetLeaderData{Address: mgr.getLeader(), Generation: msg.Data.Generation}),
 		)
@@ -274,7 +274,9 @@ func (m *GlobalPartyManager) hasConsensus(msg Message[SetLeaderData]) bool {
 	m.conclaveMutex.RLock()
 	mgr := m.conclaveManagers[msg.Data.Generation]
 	m.conclaveMutex.RUnlock()
-	return mgr.getLeader() == msg.Data.Address
+	leader := mgr.getLeader()
+	m.logger.WithField("leader", leader).WithField("msg.Data.Address", msg.Data.Address).Info("hasConsensus check")
+	return leader == msg.Data.Address
 }
 
 func (m *GlobalPartyManager) buildGenerationId() string {
@@ -320,6 +322,7 @@ func (m *GlobalPartyManager) HandleMessage(buf []byte) (error) {
 		return  nil
 	case Inconclusive:
 		msg, _ := parseMessage[InconclusiveData](buf)
+		m.endConclave(msg.Data.Generation)
 		m.logger.WithField("generation", msg.Data.Generation).Info("Conclave Inconclusive message received")
 		return  nil
 	case LeaderElected:
@@ -328,6 +331,8 @@ func (m *GlobalPartyManager) HandleMessage(buf []byte) (error) {
 		if !m.hasConsensus(msg) && m.isConclaveAdmin(m.memberId, msg.Data.Generation) {
 			m.endConclave(msg.Data.Generation)
 			m.writeToOutbox(buildMessage(m.memberId, Inconclusive, InconclusiveData{Generation: msg.Data.Generation}))
+			m.clearMembers()
+			m.writeToOutbox(buildMessage(m.memberId, Ping, UnitData{}))
 		}
 		return  nil
 	case Clipboard:
@@ -368,7 +373,5 @@ func (m *GlobalPartyManager) CheckIn() {
 	if m.conclaveInProgress() || len(m.members) == 0 {
 		return
 	}
-	m.clearMembers()
-	m.writeToOutbox(buildMessage(m.memberId, Ping, UnitData{}))
 	m.startConclave(m.buildGenerationId())
 }

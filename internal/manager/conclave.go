@@ -49,6 +49,7 @@ func (m *conclaveManager) addVote(memberId, address string, reachable bool) {
 	memberVotes, ok := m.votes[memberId]
 	if !ok {
 		memberVotes = make(map[string]int)
+		memberVotes[address] = 0
 		m.votes[memberId] = memberVotes
 	}
 	if reachable {
@@ -56,14 +57,18 @@ func (m *conclaveManager) addVote(memberId, address string, reachable bool) {
 	}
 }
 
-func (m *conclaveManager) votesComplete() bool {
+func (m *conclaveManager) votesComplete(members map[string]struct{}) bool {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
-	addresses := []string{}
+	if len(m.votes) != len(members) {
+		return false
+	}
+	votesComplete := false
 	for _, votes := range m.votes {
-		for address := range votes {
-			addresses = append(addresses, address)
+		votesComplete =  len(votes) == len(m.candidateAddresses)
+		if !votesComplete {
+			break
 		}
 	}
-	return len(addresses) == len(m.candidateAddresses)
+	return votesComplete
 }
