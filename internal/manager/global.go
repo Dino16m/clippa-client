@@ -15,11 +15,6 @@ import (
 )
 
 
-type ClipboardManager interface {
-	Write(buf []byte)
-	AddOutbox(outbox chan<- []byte)
-	Listen(ctx context.Context)
-}
 
 
 type GlobalPartyManagerProvider struct {
@@ -55,6 +50,11 @@ func (m *GlobalPartyManagerProvider) ProvideGlobalPartyManager(
 		m.clipboardManager)
 }
 
+func (m *GlobalPartyManagerProvider) IsInternalAddress(address string) bool {
+	ip := strings.Split(address, ":")[0]
+	ip = strings.TrimSpace(ip)
+	return slices.Contains(m.netInterfaceProvider(), ip)
+}
 
 
 type ServerProvider interface {
@@ -102,6 +102,7 @@ func NewGlobalPartyManager(
 		tlsConfig:            tlsConfig,
 		partyId:              partyId,
 		httpClientProvider:   provideHttpClient,
+		hangup: make(chan struct{}),
 	}
 }
 
@@ -138,6 +139,21 @@ func (m *GlobalPartyManager) removeMemberConclaves(memberId string) {
 	}
 }
 
+func (m *GlobalPartyManager) pruneConclaves() {
+	m.conclaveMutex.RLock()
+	endedConclaves := []string{}
+	for generationId, conclave := range m.conclaveManagers {
+		if time.Since(conclave.createdAt) > 5*time.Minute {
+			endedConclaves = append(endedConclaves, generationId)
+		}
+	}
+	m.conclaveMutex.RUnlock()
+
+	for _, generationId := range endedConclaves {
+		m.endConclave(generationId)
+	}
+}
+
 func (m *GlobalPartyManager) conclaveInProgress() bool {
 	m.conclaveMutex.RLock()
 	defer m.conclaveMutex.RUnlock()
@@ -166,6 +182,7 @@ func (m *GlobalPartyManager) startConclave(generationId string) {
 		mutex:              &sync.RWMutex{},
 		internalAddresses:  addresses,
 		candidateAddresses: []string{},
+		createdAt: time.Now(),
 	}
 	m.conclaveManagers[generationId] = conclave
 	m.conclaveMutex.Unlock()
@@ -178,13 +195,15 @@ func (m *GlobalPartyManager) startConclave(generationId string) {
 	m.writeToOutbox(response)
 }
 
-func (m *GlobalPartyManager) conclave(msg Message[ConclaveData]) {
+func (m *GlobalPartyManager) handleConclave(msg Message[ConclaveData]) {
 
 	m.conclaveMutex.RLock()
 	_, ok := m.conclaveManagers[msg.Data.Generation]
 	m.conclaveMutex.RUnlock()
 	if !ok && len(m.conclaveManagers) > 0 {
-		m.writeToOutbox(ErrorMessage("ERR_DUPLICATE_CONCLAVE", m.memberId))
+		m.writeToOutbox(ErrorMessage(fmt.Sprintf("%s:%s", "ERR_DUPLICATE_CONCLAVE", msg.Data.Generation), m.memberId))
+		m.logger.Error("Duplicate Conclave")
+		return
 	}
 
 	m.startConclave(msg.Data.Generation)
@@ -275,7 +294,6 @@ func (m *GlobalPartyManager) hasConsensus(msg Message[SetLeaderData]) bool {
 	mgr := m.conclaveManagers[msg.Data.Generation]
 	m.conclaveMutex.RUnlock()
 	leader := mgr.getLeader()
-	m.logger.WithField("leader", leader).WithField("msg.Data.Address", msg.Data.Address).Info("hasConsensus check")
 	return leader == msg.Data.Address
 }
 
@@ -293,7 +311,7 @@ func (m *GlobalPartyManager) HandleMessage(buf []byte) (error) {
 	case Conclave:
 		msg, _ := parseMessage[ConclaveData](buf)
 		m.logger.WithField("addresses", msg.Data.Addresses).Info("Conclave message received")
-		go m.conclave(msg)
+		go m.handleConclave(msg)
 		return nil
 	case Ping:
 		m.logger.Info("Ping received")
@@ -315,9 +333,7 @@ func (m *GlobalPartyManager) HandleMessage(buf []byte) (error) {
 		m.logger.WithField("leaderAddress", msg.Data.Address).Info("SetLeader message received")
 		if m.hasConsensus(msg) {
 			m.setLeader(msg)
-			if !m.isConclaveAdmin(m.memberId, msg.Data.Generation) {
-				close(m.hangup)
-			}
+			close(m.hangup)
 		}
 		return  nil
 	case Inconclusive:
@@ -345,6 +361,7 @@ func (m *GlobalPartyManager) HandleMessage(buf []byte) (error) {
 	case Joined:
 		msg, _ := parseMessage[UnitData](buf)
 		m.addMember(msg.Sender)
+		m.writeToOutbox(buildMessage(m.memberId, Pong, UnitData{}))
 		return  nil
 	case Left:
 		msg, _ := parseMessage[UnitData](buf)
@@ -369,9 +386,28 @@ func (m *GlobalPartyManager) Done() <-chan struct{} {
 	return m.hangup
 }
 
+func (m *GlobalPartyManager) canStartConclave() bool {
+	if len(m.members) < 1 {
+		return false
+	}
+	members := []string{}
+	for  memberId := range m.members {
+		members = append(members, memberId)
+	}
+	slices.Sort(members)
+	return members[0] == m.memberId
+}
+
 func (m *GlobalPartyManager) CheckIn() {
+	m.pruneConclaves()
+	if len(m.members) == 0 {
+		m.writeToOutbox(buildMessage(m.memberId, Ping, UnitData{}))
+	}
 	if m.conclaveInProgress() || len(m.members) == 0 {
 		return
 	}
-	m.startConclave(m.buildGenerationId())
+
+	if m.canStartConclave() {
+		m.startConclave(m.buildGenerationId())
+	}
 }

@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
@@ -10,6 +11,13 @@ import (
 	"net/http"
 	"time"
 )
+
+type ClipboardManager interface {
+	Write(buf []byte)
+	AddOutbox(outbox chan<- []byte)
+	Listen(ctx context.Context)
+}
+
 
 func parseX509Cert(certPEM string) (*x509.Certificate, error) {
 	certBytes, err := base64.StdEncoding.DecodeString(certPEM)

@@ -3,6 +3,7 @@ package manager
 import (
 	"slices"
 	"sync"
+	"time"
 )
 
 type conclaveManager struct {
@@ -11,6 +12,7 @@ type conclaveManager struct {
 	candidateAddresses []string
 	votes              map[string]map[string]int
 	mutex              *sync.RWMutex
+	createdAt time.Time
 }
 
 func (m *conclaveManager) getLeader() string {
@@ -22,15 +24,19 @@ func (m *conclaveManager) getLeader() string {
 			addressVotes[address] += vote
 		}
 	}
-	leader := ""
 	maxVotes := 0
+	voteAddress := make(map[int][]string)
 	for address, votes := range addressVotes {
+		voteAddress[votes] = append(voteAddress[votes], address)
 		if votes > maxVotes {
 			maxVotes = votes
-			leader = address
 		}
 	}
-	return leader
+	leaders := voteAddress[maxVotes]
+	if len(leaders) > 1 {
+		slices.Sort(leaders)
+	}
+	return leaders[0]
 }
 
 func (m *conclaveManager) addCandidates(addresses []string) {

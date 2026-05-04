@@ -35,8 +35,15 @@ func (l *LocalServer) Context() context.Context {
 
 type LocalServerProvider struct {
 	servers map[string]*LocalServer
+	mux     *http.ServeMux
 }
 
+func NewLocalServerProvider(mux *http.ServeMux) *LocalServerProvider {
+	return &LocalServerProvider{
+		servers: make(map[string]*LocalServer),
+		mux:     http.NewServeMux(),
+	}
+}
 func (s *LocalServerProvider) ProvideLocalServer(partyId string, tlsConfig *PartyTLS, ctx context.Context) (*LocalServer, error) {
 	localServer, ok := s.servers[partyId]
 
@@ -64,6 +71,7 @@ func (s *LocalServerProvider) ProvideLocalServer(partyId string, tlsConfig *Part
 			ClientCAs:  certPool,
 			ClientAuth: tls.RequireAndVerifyClientCert,
 		},
+		Handler: s.mux,
 		BaseContext: func(l net.Listener) context.Context {
 			return context.WithValue(serverCtx, "serverRequestId", uuid.NewString())
 		},
