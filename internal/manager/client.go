@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -24,6 +25,7 @@ type PartyClient struct {
 	localPartyManagerProvider *LocalPartyManagerProvider
 	partyHost                  *LocalPartyHost
 	memberId                   string
+	partyTls                   *PartyTLS
 }
 
 type PartyManager interface {
@@ -44,6 +46,7 @@ func NewPartyClient(
 	localPartyManagerProvider *LocalPartyManagerProvider,
 	memberId string,
 	partyHost                  *LocalPartyHost,
+	partyTls                   *PartyTLS,
 ) *PartyClient {
 	baseWsUrl := &url.URL{Scheme: "ws", Host: baseUrl.Host}
 	if baseUrl.Scheme == "https" {
@@ -60,6 +63,7 @@ func NewPartyClient(
 		localPartyManagerProvider: localPartyManagerProvider,
 		memberId:                   memberId,
 		partyHost: partyHost,
+		partyTls: partyTls,
 	}
 }
 
@@ -201,36 +205,45 @@ func (c *PartyClient) runParty(ctx context.Context, manager PartyManager, wsClie
 			}
 		}
 	}(loopCtx, wsClient, wsChannel, cancel)
-	sleepMinutes := rand.Intn(20)
-	ticker := time.NewTicker(time.Duration(sleepMinutes) * time.Minute)
+	sleepMinutes := rand.Intn(2) + 1
+	sleepDuration :=time.Duration(sleepMinutes) * time.Minute
+	c.logger.Debug("Sleeping for ", sleepDuration)
+	ticker := time.NewTicker(sleepDuration)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			manager.CheckIn()
-
+			go manager.CheckIn()
 		case <-loopCtx.Done():
 			return loopCtx.Err()
 		case msg := <-wsChannel:
-			err := manager.HandleMessage(msg)
-			if err == nil  {
-				continue
-			}
-			response := ErrorMessage(err.Error(), c.memberId)
-			writeContext, timeoutCancel := context.WithTimeout(ctx, time.Millisecond*500)
-			defer timeoutCancel()
-			err = wsClient.Write(writeContext, websocket.MessageText, response)
-			if err != nil {
-				return err
-			}
+			go func (msg []byte)  {
+				err := manager.HandleMessage(msg)
+				c.logger.Info("Handled Incoming WS")
+				if err == nil  {
+					return
+				}
+				response := ErrorMessage(err.Error(), c.memberId)
+				writeContext, timeoutCancel := context.WithTimeout(ctx, time.Millisecond*500)
+				defer timeoutCancel()
+				err = wsClient.Write(writeContext, websocket.MessageText, response)
+				if err != nil {
+					c.logger.WithError(err).Error("Web socket connection closed unexpectedly")
+					return
+				}
+			}(msg)
 		case msg := <-manager.Outbox():
-			writeContext, timeoutCancel := context.WithTimeout(ctx, time.Millisecond*500)
-			defer timeoutCancel()
-			err := wsClient.Write(writeContext, websocket.MessageText, msg)
-			if err != nil {
-				return err
-			}
+			go func (msg []byte)  {
+				c.logger.WithField("message", string(msg)).Debug("Sending message from outbox")
+				writeContext, timeoutCancel := context.WithTimeout(ctx, time.Millisecond*500)
+				defer timeoutCancel()
+				err := wsClient.Write(writeContext, websocket.MessageText, msg)
+				if err != nil {
+					c.logger.WithError(err).Error("Web socket connection closed unexpectedly from outbox")
+					return
+				}
+			}(msg)
 		case <-manager.Done():
 			return nil
 		}
@@ -256,6 +269,7 @@ func (c *PartyClient) joinGlobalParty(ctx context.Context, party Party) error {
 		return err
 	}
 
+	c.logger.WithField("WS URL ", wsUrl.String()).Info("Connecting to global party")
 	wsClient, _, err := websocket.Dial(connectCtx, wsUrl.String(), nil)
 	if err != nil {
 		return err
@@ -267,6 +281,7 @@ func (c *PartyClient) joinGlobalParty(ctx context.Context, party Party) error {
 }
 
 func (c *PartyClient) joinSelfHostedParty(ctx context.Context) error {
+	c.logger.Info("Joining self-hosted party")
 	handle := c.partyHost.Join(c.memberId)
 	manager := c.localPartyManagerProvider.ProvideLocalPartyManager(c.memberId)
 	partyCtx, cancel := context.WithCancel(ctx)
@@ -289,13 +304,14 @@ func (c *PartyClient) joinSelfHostedParty(ctx context.Context) error {
 }
 
 func (c *PartyClient) joinLocalParty(ctx context.Context, party Party) error {
+	c.logger.Info("Joining local party")
 	connectCtx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	token, err := c.getAuth()
 	if err != nil {
 		return err
 	}
-	leaderURL, err := url.Parse(party.LeaderAddress)
+	leaderURL, err := url.Parse(fmt.Sprintf("wss://%s", party.LeaderAddress))
 	if err != nil {
 		return err
 	}
@@ -306,7 +322,14 @@ func (c *PartyClient) joinLocalParty(ctx context.Context, party Party) error {
 	query.Set("memberId", c.memberId)
 	wsUrl.RawQuery = query.Encode()
 
-	wsClient, _, err := websocket.Dial(connectCtx, wsUrl.String(), nil)
+	dialerClient, err := provideHttpClient(c.partyTls)
+	if err != nil {
+		return err
+	}
+	dialOptions := &websocket.DialOptions{
+		HTTPClient: dialerClient,
+	}
+	wsClient, _, err := websocket.Dial(connectCtx, wsUrl.String(), dialOptions)
 	if err != nil {
 		return err
 	}

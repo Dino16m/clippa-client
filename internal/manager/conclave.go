@@ -4,6 +4,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 type conclaveManager struct {
@@ -13,6 +15,7 @@ type conclaveManager struct {
 	votes              map[string]map[string]int
 	mutex              *sync.RWMutex
 	createdAt time.Time
+	consensusCount int
 }
 
 func (m *conclaveManager) getLeader() string {
@@ -32,12 +35,15 @@ func (m *conclaveManager) getLeader() string {
 			maxVotes = votes
 		}
 	}
-	leaders := voteAddress[maxVotes]
-	if len(leaders) > 1 {
-		slices.Sort(leaders)
+	if maxVotes != len(m.votes) { // all parties must agree on at least one leader
+		logrus.WithField("generation", m.generationId).WithField("votes", addressVotes).Warn("Inconclusive conclave")
+		return ""
 	}
+	leaders := voteAddress[maxVotes]
+	slices.Sort(leaders)
 	return leaders[0]
 }
+
 
 func (m *conclaveManager) addCandidates(addresses []string) {
 	m.mutex.Lock()
@@ -55,8 +61,11 @@ func (m *conclaveManager) addVote(memberId, address string, reachable bool) {
 	memberVotes, ok := m.votes[memberId]
 	if !ok {
 		memberVotes = make(map[string]int)
-		memberVotes[address] = 0
 		m.votes[memberId] = memberVotes
+	}
+	_, addressExists := memberVotes[address]
+	if !addressExists {
+		m.votes[memberId][address] = 0
 	}
 	if reachable {
 		m.votes[memberId][address]++
@@ -66,7 +75,7 @@ func (m *conclaveManager) addVote(memberId, address string, reachable bool) {
 func (m *conclaveManager) votesComplete(members map[string]struct{}) bool {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
-	if len(m.votes) != len(members) {
+	if len(m.votes) != len(members) + 1 { // include yourself
 		return false
 	}
 	votesComplete := false

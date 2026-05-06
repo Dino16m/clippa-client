@@ -64,6 +64,8 @@ func (p Party) TLSConfig() (*PartyTLS, error) {
 type PartyTLS struct {
 	Certificate *x509.Certificate
 	PrivateKey  *ecdsa.PrivateKey
+	CertFile    string
+	KeyFile     string
 }
 
 type MessageType string

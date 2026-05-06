@@ -40,7 +40,8 @@ func (c *LocalPartyController) authorize(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "token is required", http.StatusBadRequest)
 		return errors.New("token is required")
 	}
-	requestUrl := c.baseUrl.JoinPath("/parties/validate")
+	requestUrl := c.baseUrl.JoinPath("/api/parties/validate")
+	c.logger.Debug("REQUEST URL ", requestUrl.String())
 
 	requestBody := map[string]any{
 		"id":    c.partyId,
@@ -63,6 +64,7 @@ func (c *LocalPartyController) authorize(w http.ResponseWriter, r *http.Request)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		c.logger.Debug("Unauthorized")
 		return errors.New("unauthorized")
 	}
 
@@ -70,6 +72,7 @@ func (c *LocalPartyController) authorize(w http.ResponseWriter, r *http.Request)
 }
 
 func (c *LocalPartyController) JoinParty(w http.ResponseWriter, r *http.Request) {
+	c.logger.Debug("Got request to join local party ", r.URL.String())
 	err := c.authorize(w, r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -132,9 +135,10 @@ func (c *LocalPartyController) JoinParty(w http.ResponseWriter, r *http.Request)
 	}
 }
 func (c *LocalPartyController) Ping(w http.ResponseWriter, r *http.Request) {
+	c.logger.Debug("Got ping request ", r.URL.String())
 	w.WriteHeader(http.StatusOK)
 }
-func (c *LocalPartyController) RegisterRoutes(globalMux *http.ServeMux) {
-	globalMux.HandleFunc("/join/", c.JoinParty)
-	globalMux.HandleFunc("/ping/", c.Ping)
+func (c *LocalPartyController) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/join/", c.JoinParty)
+	mux.HandleFunc("/ping/", c.Ping)
 }

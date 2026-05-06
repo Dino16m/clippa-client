@@ -34,7 +34,7 @@ func (s *GlobalPartyManagerTestSuite) SetupTest() {
 	logger := logrus.New()
 	logger.SetOutput(io.Discard) // Suppress logs during tests
 
-	s.clipboardManager = clip.NewClipboardManager()
+	s.clipboardManager = clip.NewClipboardManager(logger)
 	mockServerProvider := &mockServerProvider{}
 	mockNetProvider := func() []string {
 		return []string{"127.0.0.1"}

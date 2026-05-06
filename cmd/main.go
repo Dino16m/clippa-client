@@ -1,12 +1,14 @@
-package cmd
+package main
 
 import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/dino16m/clippa-client/internal"
 	"github.com/dino16m/clippa-client/internal/manager"
@@ -16,30 +18,25 @@ import (
 
 
 func configure() {
+	viper.AddConfigPath(".")
+	viper.SetConfigFile(".env")
+	err := viper.ReadInConfig()
 	viper.AutomaticEnv()
+
+	// Handle errors
+	if err != nil {
+		panic(fmt.Errorf("fatal error config file: %w", err))
+	}
+
 	viper.SetDefault("Logger.Level", "info")
 }
 
 func loadTLSConfig(tlsCert, tlsKey string) (manager.PartyTLS, error){
-	 certPemFile, err := os.Open(tlsCert)
+	keyPem, err := os.ReadFile(tlsKey)
 	if err != nil {
 		return manager.PartyTLS{}, err
 	}
-	certPem := []byte{}
-	_, err = certPemFile.Read(certPem)
-	certPemFile.Close()
-	if err != nil {
-		return manager.PartyTLS{}, err
-	}
-
-	keyPemFile, err := os.Open(tlsKey)
-
-	if err != nil {
-		return manager.PartyTLS{}, err
-	}
-	keyPem := []byte{}
-	_, err = keyPemFile.Read(keyPem)
-	keyPemFile.Close()
+	certPem, err := os.ReadFile(tlsCert)
 	if err != nil {
 		return manager.PartyTLS{}, err
 	}
@@ -65,6 +62,8 @@ func loadTLSConfig(tlsCert, tlsKey string) (manager.PartyTLS, error){
 	return manager.PartyTLS{
 		Certificate: certificate,
 		PrivateKey:  privateKey,
+		CertFile: tlsCert,
+		KeyFile: tlsKey,
 	}, nil
 }
 
@@ -96,10 +95,22 @@ func main() {
 		panic(err)
 	}
 
-	networkInterfaces := viper.GetStringSlice("NETWORK_INTERFACES")
+	networkInterfaceString := viper.GetString("NETWORK_INTERFACES")
+
+	rawInterfaces := strings.Split(networkInterfaceString, ",")
+	networkInterfaces := []string{}
+	for _, iface := range rawInterfaces {
+		trimmed := strings.TrimSpace(iface)
+		if trimmed == "" {
+			continue
+		}
+		networkInterfaces = append(networkInterfaces, trimmed)
+	}
+
+	logger := logrus.New()
 
 	container := internal.ProvideContainer(
-		logrus.New(),
+		logger,
 		*parsedURL,
 		partyId,
 		memberId,
@@ -107,7 +118,9 @@ func main() {
 		&tlsConfig,
 		networkInterfaces,
 	)
-
-	logrus.Info("Running party client")
-	container.PartyClient.Join(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go container.ClipboardManager.Listen(ctx)
+	logger.Info("Running party client")
+	logger.Fatal(container.PartyClient.Join(ctx))
 }

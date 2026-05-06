@@ -27,10 +27,11 @@ type LocalPartyHost struct {
 	logger   logrus.FieldLogger
 	outboxes map[string]chan []byte
 	mutex    *sync.RWMutex
+	clipboardManager ClipboardManager
 }
 
-func NewLocalPartyHost(logger logrus.FieldLogger) *LocalPartyHost {
-	return &LocalPartyHost{logger: logger, outboxes: make(map[string]chan []byte), mutex: &sync.RWMutex{}}
+func NewLocalPartyHost(logger logrus.FieldLogger, clipboardManager ClipboardManager) *LocalPartyHost {
+	return &LocalPartyHost{logger: logger, outboxes: make(map[string]chan []byte), mutex: &sync.RWMutex{}, clipboardManager: clipboardManager}
 }
 
 func (p *LocalPartyHost) Join(memberId string) LocalPartyHandle {

@@ -29,9 +29,13 @@ type LocalPartyManager struct {
 }
 
 func NewLocalPartyManager(memberId string, logger logrus.FieldLogger, clipboardManager ClipboardManager) *LocalPartyManager {
+	outbox := make(chan []byte)
+	clipboardManager.AddOutbox(outbox, func(b []byte) []byte {
+		return buildMessage(memberId, Clipboard, ClipboardData{Content: string(b)})
+	})
 	return &LocalPartyManager{
 		memberId: memberId,
-		outbox:   make(chan []byte),
+		outbox:   outbox,
 		done:     make(chan struct{}),
 		members:  make(map[string]struct{}),
 		logger:   logger,

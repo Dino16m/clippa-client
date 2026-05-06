@@ -3,12 +3,12 @@ package manager
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"net"
 	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 )
 
 type LocalServer struct {
@@ -29,48 +29,39 @@ func (l *LocalServer) Port() string {
 	return parts[len(parts)-1]
 }
 
-func (l *LocalServer) Context() context.Context {
-	return l.ctx
-}
-
 type LocalServerProvider struct {
 	servers map[string]*LocalServer
 	mux     *http.ServeMux
+	logger logrus.FieldLogger
 }
 
-func NewLocalServerProvider(mux *http.ServeMux) *LocalServerProvider {
+func NewLocalServerProvider(mux *http.ServeMux, logger logrus.FieldLogger) *LocalServerProvider {
 	return &LocalServerProvider{
 		servers: make(map[string]*LocalServer),
-		mux:     http.NewServeMux(),
+		mux:     mux,
+		logger: logger,
 	}
 }
-func (s *LocalServerProvider) ProvideLocalServer(partyId string, tlsConfig *PartyTLS, ctx context.Context) (*LocalServer, error) {
+func (s *LocalServerProvider) ProvideLocalServer( partyId string, tlsConfig *PartyTLS, ctx context.Context) (*LocalServer, error) {
 	localServer, ok := s.servers[partyId]
 
 	if ok {
 		return localServer, nil
 	}
 
-	certPool := x509.NewCertPool()
-	certPool.AddCert(tlsConfig.Certificate)
+	serverTls  := buildTLSConfig(tlsConfig)
+	serverTls.ClientAuth = tls.RequireAndVerifyClientCert
+	serverTls.ClientCAs = serverTls.RootCAs
 	listener, err := net.Listen("tcp", "0.0.0.0:0")
 
 	if err != nil {
 		return nil, err
 	}
 	serverCtx, cancelFunc := context.WithCancel(ctx)
+
 	server := &http.Server{
 		Addr: listener.Addr().String(),
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{
-				{
-					Leaf:       tlsConfig.Certificate,
-					PrivateKey: tlsConfig.PrivateKey,
-				},
-			},
-			ClientCAs:  certPool,
-			ClientAuth: tls.RequireAndVerifyClientCert,
-		},
+		TLSConfig: serverTls,
 		Handler: s.mux,
 		BaseContext: func(l net.Listener) context.Context {
 			return context.WithValue(serverCtx, "serverRequestId", uuid.NewString())
@@ -78,7 +69,8 @@ func (s *LocalServerProvider) ProvideLocalServer(partyId string, tlsConfig *Part
 	}
 
 	go func() {
-		if err := server.Serve(listener); err != nil {
+		s.logger.Info("Running local TLS server")
+		if err := server.ServeTLS(listener, tlsConfig.CertFile, tlsConfig.KeyFile); err != nil {
 			cancelFunc()
 		}
 	}()
