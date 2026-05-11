@@ -1,7 +1,6 @@
-package manager
+package party
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
@@ -11,13 +10,6 @@ import (
 	"net/http"
 	"time"
 )
-
-type ClipboardManager interface {
-	Write(buf []byte)
-	AddOutbox(outbox chan<- []byte, writer func([]byte) []byte)
-	Listen(ctx context.Context)
-}
-
 
 func parseX509Cert(certPEM string) (*x509.Certificate, error) {
 	certBytes, err := base64.StdEncoding.DecodeString(certPEM)
@@ -55,11 +47,11 @@ func parsePrivateKey(keyPEM string) (*ecdsa.PrivateKey, error) {
 	return privateKey, nil
 }
 
-func buildTLSConfig(config *PartyTLS) (*tls.Config) {
+func buildTLSConfig(config *PartyTLS) *tls.Config {
 
 	tlsCert := tls.Certificate{
-		PrivateKey: config.PrivateKey,
-		Leaf:       config.Certificate,
+		PrivateKey:  config.PrivateKey,
+		Leaf:        config.Certificate,
 		Certificate: [][]byte{config.Certificate.Raw},
 	}
 
@@ -69,7 +61,7 @@ func buildTLSConfig(config *PartyTLS) (*tls.Config) {
 	tlsConfig := &tls.Config{
 		Certificates:       []tls.Certificate{tlsCert},
 		InsecureSkipVerify: false,
-		RootCAs: certPool,
+		RootCAs:            certPool,
 	}
 
 	return tlsConfig

@@ -1,55 +1,35 @@
-package manager
+package server
 
 import (
 	"context"
 	"crypto/tls"
 	"net"
 	"net/http"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 )
 
-type LocalServer struct {
-	server  *http.Server
-	cancel  context.CancelFunc
-	ctx     context.Context
-	cleanup func()
-}
-
-func (l *LocalServer) Close() {
-	l.server.Shutdown(context.Background())
-	cancelFunc := l.cancel
-	cancelFunc()
-}
-
-func (l *LocalServer) Port() string {
-	parts := strings.Split(l.server.Addr, ":")
-	return parts[len(parts)-1]
-}
-
 type LocalServerProvider struct {
 	servers map[string]*LocalServer
 	mux     *http.ServeMux
-	logger logrus.FieldLogger
+	logger  logrus.FieldLogger
 }
 
 func NewLocalServerProvider(mux *http.ServeMux, logger logrus.FieldLogger) *LocalServerProvider {
 	return &LocalServerProvider{
 		servers: make(map[string]*LocalServer),
 		mux:     mux,
-		logger: logger,
+		logger:  logger,
 	}
 }
-func (s *LocalServerProvider) ProvideLocalServer( partyId string, tlsConfig *PartyTLS, ctx context.Context) (*LocalServer, error) {
+func (s *LocalServerProvider) ProvideLocalServer(partyId string, serverTls *tls.Config, ctx context.Context) (*LocalServer, error) {
 	localServer, ok := s.servers[partyId]
 
 	if ok {
 		return localServer, nil
 	}
 
-	serverTls  := buildTLSConfig(tlsConfig)
 	serverTls.ClientAuth = tls.RequireAndVerifyClientCert
 	serverTls.ClientCAs = serverTls.RootCAs
 	listener, err := net.Listen("tcp", "0.0.0.0:0")
@@ -60,9 +40,9 @@ func (s *LocalServerProvider) ProvideLocalServer( partyId string, tlsConfig *Par
 	serverCtx, cancelFunc := context.WithCancel(ctx)
 
 	server := &http.Server{
-		Addr: listener.Addr().String(),
+		Addr:      listener.Addr().String(),
 		TLSConfig: serverTls,
-		Handler: s.mux,
+		Handler:   s.mux,
 		BaseContext: func(l net.Listener) context.Context {
 			return context.WithValue(serverCtx, "serverRequestId", uuid.NewString())
 		},
@@ -70,16 +50,15 @@ func (s *LocalServerProvider) ProvideLocalServer( partyId string, tlsConfig *Par
 
 	go func() {
 		s.logger.Info("Running local TLS server")
-		if err := server.ServeTLS(listener, tlsConfig.CertFile, tlsConfig.KeyFile); err != nil {
+		if err := server.ServeTLS(listener, "", ""); err != nil {
 			cancelFunc()
 		}
 	}()
 	s.servers[partyId] = &LocalServer{
 		server: server,
-		cancel: cancelFunc,
-		ctx:    serverCtx,
 		cleanup: func() {
 			delete(s.servers, partyId)
+			cancelFunc()
 		},
 	}
 

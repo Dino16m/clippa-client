@@ -1,7 +1,8 @@
-package manager
+package party
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,15 +10,18 @@ import (
 	"time"
 
 	"github.com/dino16m/clippa-client/internal/clip"
+	"github.com/dino16m/clippa-client/internal/server"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/suite"
 )
 
 // mockServerProvider mocks the LocalServerProvider for testing purposes.
-type mockServerProvider struct{}
+type mockServerProvider struct {
+	server *http.Server
+}
 
-func (p *mockServerProvider) ProvideLocalServer(partyId string, tlsConfig *PartyTLS, ctx context.Context) (*LocalServer, error) {
-	return &LocalServer{server: &http.Server{Addr: "localhost:8080"}}, nil
+func (p *mockServerProvider) ProvideLocalServer(partyId string, tlsConfig *tls.Config, ctx context.Context) (*server.LocalServer, error) {
+	return server.NewLocalServer(p.server, func() {}), nil
 }
 
 // GlobalPartyManagerTestSuite is the test suite for the GlobalPartyManager.
@@ -35,7 +39,6 @@ func (s *GlobalPartyManagerTestSuite) SetupTest() {
 	logger.SetOutput(io.Discard) // Suppress logs during tests
 
 	s.clipboardManager = clip.NewClipboardManager(logger)
-	mockServerProvider := &mockServerProvider{}
 	mockNetProvider := func() []string {
 		return []string{"127.0.0.1"}
 	}
@@ -43,6 +46,11 @@ func (s *GlobalPartyManagerTestSuite) SetupTest() {
 	s.testServer = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
+
+	mockServerProvider := &mockServerProvider{
+		server: &http.Server{
+			Addr: s.testServer.Listener.Addr().String()},
+	}
 
 	mockHttpClientProvider := func(tlsConfig *PartyTLS) (*http.Client, error) {
 		return s.testServer.Client(), nil

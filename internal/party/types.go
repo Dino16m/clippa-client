@@ -1,10 +1,14 @@
-package manager
+package party
 
 import (
+	"context"
 	"crypto/ecdsa"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"time"
+
+	"github.com/dino16m/clippa-client/internal/server"
 )
 
 type UnitData struct{}
@@ -64,8 +68,6 @@ func (p Party) TLSConfig() (*PartyTLS, error) {
 type PartyTLS struct {
 	Certificate *x509.Certificate
 	PrivateKey  *ecdsa.PrivateKey
-	CertFile    string
-	KeyFile     string
 }
 
 type MessageType string
@@ -133,4 +135,14 @@ func getMessageType(raw []byte) (MessageType, error) {
 		return "", err
 	}
 	return MessageType(msg.MessageType), nil
+}
+
+type ServerProvider interface {
+	ProvideLocalServer(partyId string, tlsConfig *tls.Config, ctx context.Context) (*server.LocalServer, error)
+}
+
+type ClipboardManager interface {
+	Write(buf []byte)
+	AddOutbox(outbox chan<- []byte, writer func([]byte) []byte)
+	Listen(ctx context.Context)
 }

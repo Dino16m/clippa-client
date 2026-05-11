@@ -1,4 +1,4 @@
-package manager
+package party
 
 import (
 	"bytes"
@@ -22,10 +22,11 @@ type PartyClient struct {
 	partyId                    string
 	partySecret                string
 	globalPartyManagerProvider *GlobalPartyManagerProvider
-	localPartyManagerProvider *LocalPartyManagerProvider
+	localPartyManagerProvider  *LocalPartyManagerProvider
 	partyHost                  *LocalPartyHost
 	memberId                   string
 	partyTls                   *PartyTLS
+	httpClientProvider         func(*PartyTLS) (*http.Client, error)
 }
 
 type PartyManager interface {
@@ -34,7 +35,6 @@ type PartyManager interface {
 	CheckIn()
 	Done() <-chan struct{}
 }
-
 
 func NewPartyClient(
 	client *http.Client,
@@ -45,8 +45,8 @@ func NewPartyClient(
 	globalPartyManagerProvider *GlobalPartyManagerProvider,
 	localPartyManagerProvider *LocalPartyManagerProvider,
 	memberId string,
-	partyHost                  *LocalPartyHost,
-	partyTls                   *PartyTLS,
+	partyHost *LocalPartyHost,
+	partyTls *PartyTLS,
 ) *PartyClient {
 	baseWsUrl := &url.URL{Scheme: "ws", Host: baseUrl.Host}
 	if baseUrl.Scheme == "https" {
@@ -60,11 +60,19 @@ func NewPartyClient(
 		partySecret:                partySecret,
 		baseWsUrl:                  baseWsUrl,
 		globalPartyManagerProvider: globalPartyManagerProvider,
-		localPartyManagerProvider: localPartyManagerProvider,
+		localPartyManagerProvider:  localPartyManagerProvider,
 		memberId:                   memberId,
-		partyHost: partyHost,
-		partyTls: partyTls,
+		partyHost:                  partyHost,
+		partyTls:                   partyTls,
+		httpClientProvider:         provideHttpClient,
 	}
+}
+
+func (c *PartyClient) resolveTLS(party Party) (*PartyTLS, error) {
+	if c.partyTls != nil {
+		return c.partyTls, nil
+	}
+	return party.TLSConfig()
 }
 
 func (c *PartyClient) getParty() (Party, error) {
@@ -100,8 +108,8 @@ func (c *PartyClient) getParty() (Party, error) {
 func (c *PartyClient) getAuth() (string, error) {
 	requestUrl := c.baseUrl.JoinPath("/api/parties/auth")
 
-	requestBody := map[string]any {
-		"id": c.partyId,
+	requestBody := map[string]any{
+		"id":     c.partyId,
 		"secret": c.partySecret,
 	}
 	requestJson, err := json.Marshal(requestBody)
@@ -147,7 +155,6 @@ func (c *PartyClient) runEavesdropper(ctx context.Context, eavesDropper *LocalPa
 	query.Set("memberId", c.memberId)
 	wsUrl.RawQuery = query.Encode()
 
-
 	wsClient, _, err := websocket.Dial(connectCtx, wsUrl.String(), nil)
 	if err != nil {
 		return err
@@ -173,7 +180,6 @@ func (c *PartyClient) runEavesdropper(ctx context.Context, eavesDropper *LocalPa
 			}
 		}
 	}(loopCtx, wsClient, wsChannel, cancel)
-
 
 	for {
 		select {
@@ -206,7 +212,7 @@ func (c *PartyClient) runParty(ctx context.Context, manager PartyManager, wsClie
 		}
 	}(loopCtx, wsClient, wsChannel, cancel)
 	sleepMinutes := rand.Intn(2) + 1
-	sleepDuration :=time.Duration(sleepMinutes) * time.Minute
+	sleepDuration := time.Duration(sleepMinutes) * time.Minute
 	c.logger.Debug("Sleeping for ", sleepDuration)
 	ticker := time.NewTicker(sleepDuration)
 	defer ticker.Stop()
@@ -218,10 +224,10 @@ func (c *PartyClient) runParty(ctx context.Context, manager PartyManager, wsClie
 		case <-loopCtx.Done():
 			return loopCtx.Err()
 		case msg := <-wsChannel:
-			go func (msg []byte)  {
+			go func(msg []byte) {
 				err := manager.HandleMessage(msg)
-				c.logger.Info("Handled Incoming WS")
-				if err == nil  {
+				c.logger.WithError(err).Info("Handled Incoming WS")
+				if err == nil {
 					return
 				}
 				response := ErrorMessage(err.Error(), c.memberId)
@@ -230,20 +236,18 @@ func (c *PartyClient) runParty(ctx context.Context, manager PartyManager, wsClie
 				err = wsClient.Write(writeContext, websocket.MessageText, response)
 				if err != nil {
 					c.logger.WithError(err).Error("Web socket connection closed unexpectedly")
-					return
+					cancel()
 				}
 			}(msg)
 		case msg := <-manager.Outbox():
-			go func (msg []byte)  {
-				c.logger.WithField("message", string(msg)).Debug("Sending message from outbox")
-				writeContext, timeoutCancel := context.WithTimeout(ctx, time.Millisecond*500)
-				defer timeoutCancel()
-				err := wsClient.Write(writeContext, websocket.MessageText, msg)
-				if err != nil {
-					c.logger.WithError(err).Error("Web socket connection closed unexpectedly from outbox")
-					return
-				}
-			}(msg)
+			c.logger.WithField("message", string(msg)).Debug("Sending message from outbox")
+			writeContext, timeoutCancel := context.WithTimeout(ctx, time.Millisecond*500)
+			defer timeoutCancel()
+			err := wsClient.Write(writeContext, websocket.MessageText, msg)
+			if err != nil {
+				c.logger.WithError(err).Error("Web socket connection closed unexpectedly from outbox")
+				return err
+			}
 		case <-manager.Done():
 			return nil
 		}
@@ -251,6 +255,7 @@ func (c *PartyClient) runParty(ctx context.Context, manager PartyManager, wsClie
 }
 
 func (c *PartyClient) joinGlobalParty(ctx context.Context, party Party) error {
+	c.logger.Info("Joining global party")
 	connectCtx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	token, err := c.getAuth()
@@ -264,18 +269,16 @@ func (c *PartyClient) joinGlobalParty(ctx context.Context, party Party) error {
 	query.Set("memberId", c.memberId)
 	wsUrl.RawQuery = query.Encode()
 
-	tlsConfig, err := party.TLSConfig()
-	if err != nil {
-		return err
-	}
-
-	c.logger.WithField("WS URL ", wsUrl.String()).Info("Connecting to global party")
 	wsClient, _, err := websocket.Dial(connectCtx, wsUrl.String(), nil)
 	if err != nil {
 		return err
 	}
 	defer wsClient.CloseNow()
 
+	tlsConfig, err := c.resolveTLS(party)
+	if err != nil {
+		return err
+	}
 	manager := c.globalPartyManagerProvider.ProvideGlobalPartyManager(c.memberId, tlsConfig, c.partyId)
 	return c.runParty(ctx, manager, wsClient)
 }
@@ -295,7 +298,6 @@ func (c *PartyClient) joinSelfHostedParty(ctx context.Context) error {
 		case incoming := <-handle.Inbox():
 			manager.HandleMessage(incoming)
 		case <-manager.Done():
-			cancel()
 			return nil
 		case msg := <-manager.Outbox():
 			handle.HandleMessage(msg)
@@ -304,7 +306,7 @@ func (c *PartyClient) joinSelfHostedParty(ctx context.Context) error {
 }
 
 func (c *PartyClient) joinLocalParty(ctx context.Context, party Party) error {
-	c.logger.Info("Joining local party")
+	c.logger.WithField("Address", party.LeaderAddress).Info("Joining local party")
 	connectCtx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	token, err := c.getAuth()
@@ -322,7 +324,12 @@ func (c *PartyClient) joinLocalParty(ctx context.Context, party Party) error {
 	query.Set("memberId", c.memberId)
 	wsUrl.RawQuery = query.Encode()
 
-	dialerClient, err := provideHttpClient(c.partyTls)
+	tlsConfig, err := c.resolveTLS(party)
+	if err != nil {
+		return err
+	}
+
+	dialerClient, err := c.httpClientProvider(tlsConfig)
 	if err != nil {
 		return err
 	}

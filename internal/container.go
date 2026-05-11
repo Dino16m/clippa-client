@@ -7,35 +7,36 @@ import (
 
 	"github.com/dino16m/clippa-client/internal/clip"
 	"github.com/dino16m/clippa-client/internal/controllers"
-	"github.com/dino16m/clippa-client/internal/manager"
+	"github.com/dino16m/clippa-client/internal/party"
+	"github.com/dino16m/clippa-client/internal/server"
 	"github.com/sirupsen/logrus"
 )
 
 type Container struct {
 	ClipboardManager           *clip.ClipboardManager
 	LocalPartyController       *controllers.LocalPartyController
-	PartyClient                *manager.PartyClient
-	GlobalPartyManagerProvider *manager.GlobalPartyManagerProvider
-	LocalPartyHost             *manager.LocalPartyHost
-	LocalServerProvider        *manager.LocalServerProvider
-	LocalPartyManagerProvider  *manager.LocalPartyManagerProvider
+	PartyClient                *party.PartyClient
+	GlobalPartyManagerProvider *party.GlobalPartyManagerProvider
+	LocalPartyHost             *party.LocalPartyHost
+	LocalServerProvider        *server.LocalServerProvider
+	LocalPartyManagerProvider  *party.LocalPartyManagerProvider
 }
 
-func ProvideContainer(logger *logrus.Logger, baseUrl url.URL, partyId string, memberId string, partySecret string, PartyTLS *manager.PartyTLS, networkInterfaces []string) *Container {
+func ProvideContainer(logger *logrus.Logger, baseUrl url.URL, partyId string, memberId string, partySecret string, PartyTLS *party.PartyTLS, networkInterfaces []string) *Container {
 	clipboardManager := clip.NewClipboardManager(logger)
 
 	httpClient := &http.Client{
 		Timeout: time.Duration(5) * time.Second,
 	}
-	localPartyHost := manager.NewLocalPartyHost(logger, clipboardManager)
+	localPartyHost := party.NewLocalPartyHost(logger, clipboardManager)
 	localPartyCtrl := controllers.NewLocalPartyController(&baseUrl, httpClient, logger, localPartyHost, partyId)
 	mux := http.NewServeMux()
 	localPartyCtrl.RegisterRoutes(mux)
-	localServerProvider := manager.NewLocalServerProvider(mux, logger)
+	localServerProvider := server.NewLocalServerProvider(mux, logger)
 
-	globalPartyManagerProvider := manager.NewGlobalPartyManagerProvider(logger, localServerProvider, func() []string { return networkInterfaces }, clipboardManager)
-	localPartyManagerProvider := manager.NewLocalPartyManagerProvider(logger, clipboardManager)
-	partyClient := manager.NewPartyClient(
+	globalPartyManagerProvider := party.NewGlobalPartyManagerProvider(logger, localServerProvider, func() []string { return networkInterfaces }, clipboardManager)
+	localPartyManagerProvider := party.NewLocalPartyManagerProvider(logger, clipboardManager)
+	partyClient := party.NewPartyClient(
 		httpClient,
 		&baseUrl,
 		logger,

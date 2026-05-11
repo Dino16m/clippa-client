@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/dino16m/clippa-client/internal/manager"
+	"github.com/dino16m/clippa-client/internal/party"
 	"github.com/sirupsen/logrus"
 )
 
@@ -19,11 +19,11 @@ type LocalPartyController struct {
 	baseUrl   *url.URL
 	client    *http.Client
 	logger    logrus.FieldLogger
-	partyHost *manager.LocalPartyHost
+	partyHost *party.LocalPartyHost
 	partyId   string
 }
 
-func NewLocalPartyController(baseURL *url.URL, client *http.Client, logger logrus.FieldLogger, partyHost *manager.LocalPartyHost, partyId string) *LocalPartyController {
+func NewLocalPartyController(baseURL *url.URL, client *http.Client, logger logrus.FieldLogger, partyHost *party.LocalPartyHost, partyId string) *LocalPartyController {
 	return &LocalPartyController{
 		baseUrl:   baseURL,
 		client:    client,

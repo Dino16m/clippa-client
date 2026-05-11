@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/dino16m/clippa-client/internal"
-	"github.com/dino16m/clippa-client/internal/manager"
+	"github.com/dino16m/clippa-client/internal/party"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
@@ -31,39 +31,49 @@ func configure() {
 	viper.SetDefault("Logger.Level", "info")
 }
 
-func loadTLSConfig(tlsCert, tlsKey string) (manager.PartyTLS, error){
+func loadTLSConfig() (*party.PartyTLS, error){
+	tlsCert := viper.GetString("TLS_CERT")
+	tlsKey := viper.GetString("TLS_KEY")
+
+	if tlsCert == "" &&  tlsKey == "" {
+		return nil, nil
+	}
+
+	if tlsCert == "" || tlsKey == "" {
+		return nil, errors.New("TLS_CERT and TLS_KEY must be set")
+	}
+
+
 	keyPem, err := os.ReadFile(tlsKey)
 	if err != nil {
-		return manager.PartyTLS{}, err
+		return nil, err
 	}
 	certPem, err := os.ReadFile(tlsCert)
 	if err != nil {
-		return manager.PartyTLS{}, err
+		return &party.PartyTLS{}, err
 	}
 
 	certBlock, _ := pem.Decode(certPem)
 	if certBlock == nil || certBlock.Type != "CERTIFICATE" {
-		return manager.PartyTLS{}, errors.New("failed to decode PEM block containing certficate")
+		return &party.PartyTLS{}, errors.New("failed to decode PEM block containing certficate")
 	}
 	certificate, err := x509.ParseCertificate(certBlock.Bytes)
 	if err != nil {
-		return manager.PartyTLS{}, err
+		return &party.PartyTLS{}, err
 	}
 
 	keyBlock, _ := pem.Decode(keyPem)
 	if keyBlock == nil || keyBlock.Type != "EC PRIVATE KEY" {
-		return manager.PartyTLS{}, errors.New("failed to decode PEM block containing key")
+		return &party.PartyTLS{}, errors.New("failed to decode PEM block containing key")
 	}
 	privateKey, err := x509.ParseECPrivateKey(keyBlock.Bytes)
 	if err != nil {
-		return manager.PartyTLS{}, err
+		return &party.PartyTLS{}, err
 	}
 
-	return manager.PartyTLS{
+	return &party.PartyTLS{
 		Certificate: certificate,
 		PrivateKey:  privateKey,
-		CertFile: tlsCert,
-		KeyFile: tlsKey,
 	}, nil
 }
 
@@ -81,8 +91,6 @@ func main() {
 	partyId := getRequiredVar("PARTY_ID")
 	memberId := getRequiredVar("MEMBER_ID")
 	partySecret := getRequiredVar("PARTY_SECRET")
-	tlsCert := getRequiredVar("TLS_CERT")
-	tlsKey := getRequiredVar("TLS_KEY")
 	baseURL := getRequiredVar("BASE_URL")
 
 	parsedURL, err := url.Parse(baseURL)
@@ -90,7 +98,7 @@ func main() {
 		panic(err)
 	}
 
-	tlsConfig, err := loadTLSConfig(tlsCert, tlsKey)
+	tlsConfig, err := loadTLSConfig()
 	if err != nil {
 		panic(err)
 	}
@@ -115,7 +123,7 @@ func main() {
 		partyId,
 		memberId,
 		partySecret,
-		&tlsConfig,
+		tlsConfig,
 		networkInterfaces,
 	)
 	ctx, cancel := context.WithCancel(context.Background())
