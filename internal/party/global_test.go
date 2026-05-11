@@ -65,6 +65,7 @@ func (s *GlobalPartyManagerTestSuite) SetupTest() {
 		&PartyTLS{},
 		"test-party",
 		s.clipboardManager,
+		NewConclaveManager(),
 	)
 	s.manager.httpClientProvider = mockHttpClientProvider
 }
@@ -204,10 +205,11 @@ func (s *GlobalPartyManagerTestSuite) TestSetLeaderMessage() {
 		}
 	}()
 
-	s.manager.startConclave(generationId)
-
+	err :=s.manager.startConclave(generationId)
+	s.NoError(err)
+	conclave, _ := s.manager.conclaveManager.GetConclave(generationId)
 	// Get the internal address (which is the leader after startConclave self-votes)
-	internalAddress := s.manager.conclaveManagers[generationId].internalAddresses[0]
+	internalAddress := conclave.internalAddresses[0]
 
 	// Send a SetLeader message that matches the consensus leader
 	setLeaderMessage := buildMessage("leader-member", SetLeader, SetLeaderData{
@@ -215,11 +217,11 @@ func (s *GlobalPartyManagerTestSuite) TestSetLeaderMessage() {
 		Generation: generationId,
 	})
 
-	err := s.manager.HandleMessage(setLeaderMessage)
+	err = s.manager.HandleMessage(setLeaderMessage)
 	s.NoError(err)
 
 	// Assert the conclave was terminated
-	_, ok := s.manager.conclaveManagers[generationId]
+	_, ok := s.manager.conclaveManager.GetConclave(generationId)
 	s.False(ok, "conclave should have been terminated")
 }
 
@@ -265,7 +267,7 @@ func (s *GlobalPartyManagerTestSuite) TestLeaderNotElectedWithDisagreement() {
 	}
 
 	// Verify the old conclave is terminated
-	_, ok := s.manager.conclaveManagers[generationId]
+	_, ok := s.manager.conclaveManager.GetConclave(generationId)
 	s.False(ok, "conclave should have been terminated")
 }
 
@@ -295,15 +297,16 @@ func (s *GlobalPartyManagerTestSuite) TestVoteAggregationAndLeaderElection() {
 	}()
 
 	s.manager.startConclave(generationId)
+	conclave, _ := s.manager.conclaveManager.GetConclave(generationId)
 
 	// Simulate votes from other members
 	vote1 := buildMessage("member-2", Vote, VoteData{
 		Generation: generationId,
-		Ballots:    []Ballot{{Address: s.manager.conclaveManagers[generationId].internalAddresses[0], Reachable: true}},
+		Ballots:    []Ballot{{Address: conclave.internalAddresses[0], Reachable: true}},
 	})
 	vote2 := buildMessage("member-3", Vote, VoteData{
 		Generation: generationId,
-		Ballots:    []Ballot{{Address: s.manager.conclaveManagers[generationId].internalAddresses[0], Reachable: true}},
+		Ballots:    []Ballot{{Address: conclave.internalAddresses[0], Reachable: true}},
 	})
 
 	s.manager.HandleMessage(vote1)
@@ -343,6 +346,6 @@ func (s *GlobalPartyManagerTestSuite) TestInconclusiveMessage() {
 
 	s.manager.HandleMessage(inconclusiveMessage)
 
-	_, ok := s.manager.conclaveManagers[generationId]
+	_, ok := s.manager.conclaveManager.GetConclave(generationId)
 	s.False(ok, "conclave should have been terminated")
 }

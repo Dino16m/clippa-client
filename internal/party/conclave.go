@@ -8,7 +8,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-type conclaveManager struct {
+type conclave struct {
 	generationId       string
 	internalAddresses  []string
 	candidateAddresses []string
@@ -18,7 +18,18 @@ type conclaveManager struct {
 	consensusCount int
 }
 
-func (m *conclaveManager) getLeader() string {
+func newConclave(generationId string, internalAddresses []string) *conclave {
+	return &conclave{
+		generationId:       generationId,
+		votes:              make(map[string]map[string]int),
+		mutex:              &sync.RWMutex{},
+		internalAddresses:  internalAddresses,
+		candidateAddresses: []string{},
+		createdAt:          time.Now(),
+	}
+}
+
+func (m *conclave) getLeader() string {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	addressVotes := make(map[string]int)
@@ -45,7 +56,7 @@ func (m *conclaveManager) getLeader() string {
 }
 
 
-func (m *conclaveManager) addCandidates(addresses []string) {
+func (m *conclave) addCandidates(addresses []string) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	for _, address := range addresses {
@@ -55,7 +66,7 @@ func (m *conclaveManager) addCandidates(addresses []string) {
 	}
 }
 
-func (m *conclaveManager) addVote(memberId, address string, reachable bool) {
+func (m *conclave) addVote(memberId, address string, reachable bool) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	memberVotes, ok := m.votes[memberId]
@@ -72,7 +83,7 @@ func (m *conclaveManager) addVote(memberId, address string, reachable bool) {
 	}
 }
 
-func (m *conclaveManager) votesComplete(members map[string]struct{}) bool {
+func (m *conclave) votesComplete(members map[string]struct{}) bool {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	if len(m.votes) != len(members) + 1 { // include yourself
