@@ -6,15 +6,26 @@ import (
 	"time"
 )
 
+type conclaveVote struct {
+	Address  string
+	Reachable bool
+	MemberId string
+	GenerationId string
+}
+
 type ConclaveManager struct {
 	conclaves map[string]*conclave
 	mutex     *sync.RWMutex
+	delayedBallots map[string][]conclaveVote
 }
+
+
 
 func NewConclaveManager() *ConclaveManager {
 	return &ConclaveManager{
 		conclaves: make(map[string]*conclave),
 		mutex:     &sync.RWMutex{},
+		delayedBallots: make(map[string][]conclaveVote),
 	}
 }
 
@@ -45,6 +56,7 @@ func (m *ConclaveManager) StartConclave(generationId string, addresses []string)
 	defer m.mutex.Unlock()
 	conclave := newConclave(generationId, addresses)
 	m.conclaves[generationId] = conclave
+	m.applyDelayedBallots(conclave)
 	return conclave
 }
 
@@ -97,7 +109,22 @@ func (m *ConclaveManager) AddVote(generationId, memberId, address string, reacha
 	defer m.mutex.Unlock()
 	conclave, ok := m.conclaves[generationId]
 	if !ok {
-		return // TODO: Store in a temp buffer
+		m.delayedBallots[generationId] = append(m.delayedBallots[generationId], conclaveVote{Address: address, Reachable: reachable, MemberId: memberId, GenerationId: generationId})
+		return
 	}
+
 	conclave.addVote(memberId, address, reachable)
+
+	m.applyDelayedBallots(conclave)
+}
+
+
+// Applies ballots cast before the conclave started.
+// This function expects that a lock is acquired before it's called.
+func (m *ConclaveManager) applyDelayedBallots(conclave *conclave) {
+	delayedBallots := m.delayedBallots[conclave.generationId]
+	for _, delayedBallot := range delayedBallots {
+		conclave.addVote(delayedBallot.MemberId, delayedBallot.Address, delayedBallot.Reachable)
+	}
+	delete(m.delayedBallots, conclave.generationId)
 }
