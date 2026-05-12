@@ -23,6 +23,7 @@ func NewLocalServerProvider(mux *http.ServeMux, logger logrus.FieldLogger) *Loca
 		servers: make(map[string]*LocalServer),
 		mux:     mux,
 		logger:  logger,
+		mutex: &sync.RWMutex{},
 	}
 }
 func (s *LocalServerProvider) ProvideLocalServer(partyId string, serverTls *tls.Config, ctx context.Context) (*LocalServer, error) {
