@@ -117,6 +117,23 @@ func (m *GlobalPartyManager) removeMember(memberId string) {
 	delete(m.members, memberId)
 }
 
+func (m *GlobalPartyManager) getInternalAddresses() ([]string, error) {
+	interfaces := m.netInterfaceProvider()
+	if len(interfaces) == 0 {
+		return []string{}, nil
+	}
+
+	localServer, err := m.serverProvider.GetOrCreateServer(m.partyId, buildTLSConfig(m.tlsConfig), context.Background())
+	if err != nil {
+		return nil, err
+	}
+	port := localServer.Port()
+	addresses := make([]string, len(interfaces))
+	for idx, iface := range interfaces {
+		addresses[idx] = fmt.Sprintf("%s:%s", iface, port)
+	}
+	return addresses, nil
+}
 
 func (m *GlobalPartyManager) startConclave(generationId string) error {
 	_, ok := m.conclaveManager.GetConclave(generationId)
@@ -125,30 +142,37 @@ func (m *GlobalPartyManager) startConclave(generationId string) error {
 		return nil
 	}
 
-	localServer, err := m.serverProvider.ProvideLocalServer(m.partyId, buildTLSConfig(m.tlsConfig), context.Background())
+	m.conclaveManager.AbortActiveConclaves()
+
+	addresses, err := m.getInternalAddresses()
 	if err != nil {
 		return err
 	}
-	port := localServer.Port()
-	interfaces := m.netInterfaceProvider()
-	addresses := make([]string, len(interfaces))
-	for idx, iface := range interfaces {
-		addresses[idx] = fmt.Sprintf("%s:%s", iface, port)
-	}
+
 	conclave := m.conclaveManager.StartConclave(generationId, addresses)
 	conclave.addCandidates(addresses)
 	for _, address := range addresses {
 		conclave.addVote(m.memberId, address, true)
 	}
-
 	response := buildMessage(m.memberId, Conclave, ConclaveData{Addresses: addresses, Generation: generationId})
 	m.writeToOutbox(response)
 	return nil
 }
 
+func (m *GlobalPartyManager) isNewGeneration(generationId string) bool {
+	conclaves := m.conclaveManager.ListConclaves()
+	epochId := m.epochId(generationId)
+	for _, conclave := range conclaves {
+		if m.epochId(conclave) > epochId {
+			return false
+		}
+	}
+	return true
+}
+
 func (m *GlobalPartyManager) handleConclave(msg Message[ConclaveData]) {
 	_, ok := m.conclaveManager.GetConclave(msg.Data.Generation)
-	if !ok && len(m.conclaveManager.Conclaves()) > 0 {
+	if !ok && len(m.conclaveManager.Conclaves()) > 0 && !m.isNewGeneration(msg.Data.Generation) {
 		m.writeToOutbox(ErrorMessage(fmt.Sprintf("%s:%s", "ERR_DUPLICATE_CONCLAVE", msg.Data.Generation), m.memberId))
 		m.logger.Error("Duplicate Conclave")
 		return
@@ -225,8 +249,8 @@ func (m *GlobalPartyManager) handleVote(msg Message[VoteData]) {
 
 
 func (m *GlobalPartyManager) cleanupServer() {
-	server, err := m.serverProvider.ProvideLocalServer(m.partyId, buildTLSConfig(m.tlsConfig), context.Background())
-	if err != nil {
+	server, ok := m.serverProvider.GetServer(m.partyId)
+	if !ok {
 		return
 	}
 	server.Close()
@@ -256,8 +280,13 @@ func (m *GlobalPartyManager) hasConsensus(msg Message[SetLeaderData]) bool {
 	return conclave.getLeader() == msg.Data.Address
 }
 
+func (m *GlobalPartyManager) epochId(generationId string) string {
+	return strings.Split(generationId, ":")[1]
+}
+
 func (m *GlobalPartyManager) buildGenerationId() string {
-	return fmt.Sprintf("%s:%s", m.memberId, uuid.NewString())
+	id, _ := uuid.NewV7()
+	return fmt.Sprintf("%s:%s", m.memberId, id.String())
 }
 
 func (m *GlobalPartyManager) handleLeaderElected(msg Message[SetLeaderData]) {
@@ -274,6 +303,12 @@ func (m *GlobalPartyManager) handleLeaderElected(msg Message[SetLeaderData]) {
 			close(m.hangup)
 		})
 	}
+}
+
+func (m *GlobalPartyManager) handleMemberLeft(msg Message[UnitData]) {
+	m.removeMember(msg.Sender)
+	m.logger.WithField("senderId", msg.Sender).Info("Member left")
+	m.conclaveManager.AbortActiveConclaves()
 }
 
 func (m *GlobalPartyManager) HandleMessage(buf []byte) error {
@@ -342,9 +377,7 @@ func (m *GlobalPartyManager) HandleMessage(buf []byte) error {
 		return nil
 	case Left:
 		msg, _ := parseMessage[UnitData](buf)
-		m.removeMember(msg.Sender)
-		m.conclaveManager.RemoveMemberConclaves(msg.Sender)
-		m.logger.WithField("senderId", msg.Sender).Info("Member left")
+		m.handleMemberLeft(msg)
 		return nil
 	case Error:
 		msg, _ := parseMessage[ErrorData](buf)
@@ -378,9 +411,18 @@ func (m *GlobalPartyManager) canStartConclave() bool {
 	return members[0] == m.memberId
 }
 
+func (m *GlobalPartyManager) pruneConclaves() {
+	pruned := m.conclaveManager.PruneConclaves()
+	for _, generationId := range pruned {
+		if m.conclaveManager.IsConclaveAdmin(m.memberId, generationId) {
+			m.writeToOutbox(buildMessage(m.memberId, Inconclusive, InconclusiveData{Generation: generationId}))
+		}
+	}
+}
+
 func (m *GlobalPartyManager) CheckIn() {
 	m.logger.WithField("MemberCount", len(m.members)).WithField("CanStartConclave", m.canStartConclave()).Debug("Checking in")
-	m.conclaveManager.PruneConclaves()
+	m.pruneConclaves()
 	if len(m.members) == 0 || !m.conclaveManager.ConclaveInProgress() {
 		m.writeToOutbox(buildMessage(m.memberId, Ping, UnitData{}))
 	}

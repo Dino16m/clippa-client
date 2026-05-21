@@ -26,7 +26,15 @@ func NewLocalServerProvider(mux *http.ServeMux, logger logrus.FieldLogger) *Loca
 		mutex: &sync.RWMutex{},
 	}
 }
-func (s *LocalServerProvider) ProvideLocalServer(partyId string, serverTls *tls.Config, ctx context.Context) (*LocalServer, error) {
+func (s *LocalServerProvider) GetServer(partyId string) (*LocalServer, bool) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	localServer, ok := s.servers[partyId]
+
+	return localServer, ok
+}
+
+func (s *LocalServerProvider) GetOrCreateServer(partyId string, serverTls *tls.Config, ctx context.Context) (*LocalServer, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	localServer, ok := s.servers[partyId]

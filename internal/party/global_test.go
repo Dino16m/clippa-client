@@ -20,7 +20,11 @@ type mockServerProvider struct {
 	server *http.Server
 }
 
-func (p *mockServerProvider) ProvideLocalServer(partyId string, tlsConfig *tls.Config, ctx context.Context) (*server.LocalServer, error) {
+func (p *mockServerProvider) GetServer(partyId string) (*server.LocalServer, bool) {
+	return server.NewLocalServer(p.server, func() {}), true
+}
+
+func (p *mockServerProvider) GetOrCreateServer(partyId string, tlsConfig *tls.Config, ctx context.Context) (*server.LocalServer, error) {
 	return server.NewLocalServer(p.server, func() {}), nil
 }
 

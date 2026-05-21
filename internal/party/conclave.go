@@ -66,6 +66,7 @@ func (m *conclave) addCandidates(addresses []string) {
 	}
 }
 
+
 func (m *conclave) addVote(memberId, address string, reachable bool) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()

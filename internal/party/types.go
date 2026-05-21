@@ -138,7 +138,8 @@ func getMessageType(raw []byte) (MessageType, error) {
 }
 
 type ServerProvider interface {
-	ProvideLocalServer(partyId string, tlsConfig *tls.Config, ctx context.Context) (*server.LocalServer, error)
+	GetServer(partyId string) (*server.LocalServer, bool)
+	GetOrCreateServer(partyId string, tlsConfig *tls.Config, ctx context.Context) (*server.LocalServer, error)
 }
 
 type ClipboardManager interface {

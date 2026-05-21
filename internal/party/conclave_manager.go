@@ -19,8 +19,6 @@ type ConclaveManager struct {
 	delayedBallots map[string][]conclaveVote
 }
 
-
-
 func NewConclaveManager() *ConclaveManager {
 	return &ConclaveManager{
 		conclaves: make(map[string]*conclave),
@@ -29,7 +27,7 @@ func NewConclaveManager() *ConclaveManager {
 	}
 }
 
-func (m *ConclaveManager) PruneConclaves() {
+func (m *ConclaveManager) PruneConclaves() []string {
 	m.mutex.RLock()
 	endedConclaves := []string{}
 	for generationId, conclave := range m.conclaves {
@@ -42,6 +40,17 @@ func (m *ConclaveManager) PruneConclaves() {
 	for _, generationId := range endedConclaves {
 		m.EndConclave(generationId)
 	}
+	return endedConclaves
+}
+
+func (m *ConclaveManager) ListConclaves() []string {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	conclaveIds := []string{}
+	for generationId := range m.conclaves {
+		conclaveIds = append(conclaveIds, generationId)
+	}
+	return conclaveIds
 }
 
 func (m *ConclaveManager) GetConclave(generationId string) (*conclave, bool) {
@@ -74,6 +83,15 @@ func (m *ConclaveManager) ConclaveInProgress() bool {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	return len(m.conclaves) > 0
+}
+
+func (m *ConclaveManager) AbortActiveConclaves() []string {
+	conclaveIds := []string{}
+	for generationId := range m.conclaves {
+		conclaveIds = append(conclaveIds, generationId)
+		m.EndConclave(generationId)
+	}
+	return conclaveIds
 }
 
 func (m *ConclaveManager) RemoveMemberConclaves(memberId string) {
