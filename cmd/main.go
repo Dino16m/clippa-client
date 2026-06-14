@@ -116,6 +116,10 @@ func main() {
 	}
 
 	logger := logrus.New()
+	logLevel, err := logrus.ParseLevel(viper.GetString("Logger.Level"))
+	if err == nil {
+		logger.SetLevel(logLevel)
+	}
 
 	container := internal.ProvideContainer(
 		logger,
@@ -128,7 +132,14 @@ func main() {
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go container.ClipboardManager.Listen(ctx)
+	go func(ctx context.Context, cancel context.CancelFunc) {
+		err := container.ClipboardManager.Listen(ctx)
+		if err != nil {
+			cancel()
+			logger.WithError(err).Fatal("Clipboard failed to initialize")
+		}
+	}(ctx, cancel)
+
 	logger.Info("Running party client")
 	logger.Fatal(container.PartyClient.Join(ctx))
 }

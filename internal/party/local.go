@@ -52,6 +52,7 @@ func (m *LocalPartyManager) EavesDrop(buf []byte) {
 	if err != nil {
 		return
 	}
+	m.logger.WithField("MSG", msgType).Info("Eavesdropping")
 	if msgType == Conclave {
 		m.writeToOutbox(buildMessage(m.memberId, Conclave, ConclaveData{Generation: fmt.Sprintf("%s:1", m.memberId)}))
 		m.hangup()

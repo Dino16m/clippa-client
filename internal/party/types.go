@@ -145,5 +145,5 @@ type ServerProvider interface {
 type ClipboardManager interface {
 	Write(buf []byte)
 	AddOutbox(outbox chan<- []byte, writer func([]byte) []byte)
-	Listen(ctx context.Context)
+	Listen(ctx context.Context) error
 }

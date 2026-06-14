@@ -40,19 +40,27 @@ func (m *ClipboardManager) Outbox() <-chan []byte {
 	return m.inbox
 }
 
-func (m *ClipboardManager) Listen(ctx context.Context) {
-	clipboard.Init()
+func (m *ClipboardManager) Listen(ctx context.Context) error {
+	m.logger.Info("Initialising clipboard")
+	err := clipboard.Init()
+	if err != nil {
+		return err
+	}
+	m.logger.Info("Clipboard initialised")
 	var lastCopied string = ""
 	ch := clipboard.Watch(ctx, clipboard.FmtText)
+	m.logger.Info("Watching clipboard")
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case outgoingClip := <-ch:
-			m.logger.Debug("Received outgoing Clip")
+			m.logger.Info("Received outgoing Clip")
 			if lastCopied == string(outgoingClip) {
+				m.logger.Info("Skipping outgoing Clip")
 				continue
 			}
+			m.logger.Info("Forwarding outgoing Clip")
 
 			timer := time.NewTimer(time.Millisecond * 500)
 			defer timer.Stop()
@@ -75,7 +83,7 @@ func (m *ClipboardManager) Listen(ctx context.Context) {
 			}
 
 		case incomingClip := <-m.inbox:
-			m.logger.Debug("Received incoming Clip")
+			m.logger.Info("Received incoming Clip")
 			if lastCopied == string(incomingClip) {
 				continue
 			}

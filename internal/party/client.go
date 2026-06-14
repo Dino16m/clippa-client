@@ -142,12 +142,14 @@ func (c *PartyClient) getAuth() (string, error) {
 }
 
 func (c *PartyClient) runEavesdropper(ctx context.Context, eavesDropper *LocalPartyManager) error {
+	c.logger.Info("Starting eavesdropper")
 	connectCtx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	token, err := c.getAuth()
 	if err != nil {
 		return err
 	}
+
 	wsUrl := c.baseWsUrl.JoinPath("/api/parties/join")
 	query := wsUrl.Query()
 	query.Set("id", c.partyId)
@@ -155,12 +157,14 @@ func (c *PartyClient) runEavesdropper(ctx context.Context, eavesDropper *LocalPa
 	query.Set("memberId", c.memberId)
 	wsUrl.RawQuery = query.Encode()
 
-	wsClient, _, err := websocket.Dial(connectCtx, wsUrl.String(), nil)
+	dialOptions := &websocket.DialOptions{
+		HTTPClient: c.client,
+	}
+	wsClient, _, err := websocket.Dial(connectCtx, wsUrl.String(), dialOptions)
 	if err != nil {
 		return err
 	}
 	defer wsClient.CloseNow()
-
 	loopCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	wsChannel := make(chan []byte)
@@ -269,7 +273,11 @@ func (c *PartyClient) joinGlobalParty(ctx context.Context, party Party) error {
 	query.Set("memberId", c.memberId)
 	wsUrl.RawQuery = query.Encode()
 
-	wsClient, _, err := websocket.Dial(connectCtx, wsUrl.String(), nil)
+	dialOptions := &websocket.DialOptions{
+		HTTPClient: c.client,
+	}
+
+	wsClient, _, err := websocket.Dial(connectCtx, wsUrl.String(), dialOptions)
 	if err != nil {
 		return err
 	}

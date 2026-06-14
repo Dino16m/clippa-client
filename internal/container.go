@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"crypto/tls"
 	"net/http"
 	"net/url"
 	"time"
@@ -27,6 +28,11 @@ func ProvideContainer(logger *logrus.Logger, baseUrl url.URL, partyId string, me
 
 	httpClient := &http.Client{
 		Timeout: time.Duration(5) * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
 	}
 	localPartyHost := party.NewLocalPartyHost(logger, clipboardManager)
 	localPartyCtrl := controllers.NewLocalPartyController(&baseUrl, httpClient, logger, localPartyHost, partyId)
